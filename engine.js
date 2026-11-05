@@ -134,7 +134,19 @@
     reservedNext = round2(reservedNext);
 
     // 今日の枠は「今日の朝の時点」で決める（今日すでに使った分を戻して計算）。残りの枠 = 今日の枠 − 今日使った額
-    const free = round2(available - reserved - reservedNext - (Number(state.keepAmount) || 0));
+    // 使いすぎ防止の枠：今月まだ使える分を先によける。枠の中で使った分は、今日の額を減らさない（枠を超えた分だけ減る）。状態から毎回計算するので、古い値が残らない
+    const month = String(today).slice(0, 7);
+    let capHold = 0, capAbsorbed = 0;
+    for (const c of state.caps || []) {
+      const cap = Number(c.amount) || 0; if (cap <= 0) continue;
+      const inMonth = (state.spends || []).filter((x) => x.cat === c.cat && String(x.date).slice(0, 7) === month);
+      const usedBefore = inMonth.filter((x) => x.date !== today).reduce((a, x) => a + (Number(x.amount) || 0), 0);
+      const usedToday = inMonth.filter((x) => x.date === today).reduce((a, x) => a + (Number(x.amount) || 0), 0);
+      const leftBefore = Math.max(0, cap - usedBefore);
+      capHold += leftBefore; capAbsorbed += Math.min(usedToday, leftBefore);
+    }
+    capHold = round2(capHold); capAbsorbed = round2(capAbsorbed);
+    const free = round2(available - reserved - reservedNext - (Number(state.keepAmount) || 0) - capHold);
     const freeStart = round2(free + spentToday);
     let perDay = freeStart > 0 ? Math.floor((freeStart / daysLeft) * 100 + 1e-6) / 100 : 0;
     const comingSoon = round2((state.income || []).filter((i) => (i.status === "invoiced" || i.status === "expected"))
@@ -144,7 +156,7 @@
     let limit = perDay, shortDate = null, shortAmount = 0, limitDay = null;
     if (state.mode === "variable") {
       const H = daysLeft + (state.cushionDays == null ? 30 : Math.max(0, Number(state.cushionDays) || 0));
-      const lastDay = fromDays(toDays(today) + H - 1), keep = Number(state.keepAmount) || 0;
+      const lastDay = fromDays(toDays(today) + H - 1), keep = (Number(state.keepAmount) || 0) + capHold;
       const events = overdue > 0 ? [{ d: today, a: overdue }] : [];
       for (const b of state.bills || []) duesBetween(b, today, lastDay).forEach((d) => events.push({ d, a: Number(b.amount) }));
       const start = available + spentToday;
@@ -173,10 +185,11 @@
     if (budgetPerDay != null && budgetPerDay < perDay) { perDay = budgetPerDay; capped = "budget"; }
     const cap = Number(state.dailyCap) || 0;
     if (cap > 0 && perDay > cap) { perDay = cap; capped = true; }
-    const safeToday = Math.max(0, round2(perDay - spentToday));
+    const spentEff = round2(spentToday - capAbsorbed); // 枠の中で使った分は数えない
+    const safeToday = Math.max(0, round2(perDay - spentEff));
     return {
       today, available: round2(available), reserved, reservedNext, free, daysLeft, payday, paydayPassed,
-      allowance: perDay, safeToday, overToday: spentToday > perDay ? round2(spentToday - perDay) : 0,
+      allowance: perDay, safeToday, overToday: spentEff > perDay ? round2(spentEff - perDay) : 0, capHold: round2(capHold - capAbsorbed),
       shortfall: shortDate ? shortAmount : (state.mode !== "variable" && free < 0) ? round2(-free) : 0, overdue, overdueList, spentToday: round2(spentToday), comingSoon, dueList,
       shortDate, shortAmount, limitDay, capped, budgetPerDay, monthlyBills,
       status: state.mode === "variable" ? (shortDate ? "over" : perDay <= 0 ? "none" : "ok") : (free < 0 ? "over" : freeStart <= 0 ? "none" : "ok"),

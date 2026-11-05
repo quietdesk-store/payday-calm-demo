@@ -119,6 +119,12 @@
     if (!Array.isArray(s.keeps)) { s.keeps = (Number(s.keepAmount) > 0) ? [{ id: "k0", name: s.lang === "ja" ? "取っておく" : "Set aside", amount: Number(s.keepAmount) }] : []; } return s; }
   const keepSum = () => round2c((S.keeps || []).reduce((a, k) => a + (Number(k.amount) || 0), 0));
   const syncKeep = () => { S.keepAmount = keepSum(); };
+  /* 使いすぎ防止の枠（任意）：カテゴリごとの月の枠。今月まだ使える分を先によける */
+  const capsOn = () => (S.caps || []).filter((c) => Number(c.amount) > 0);
+  const capSpent = (cat) => { const m = todayStr().slice(0, 7); return round2c(S.spends.filter((x) => x.cat === cat && String(x.date).slice(0, 7) === m).reduce((a, x) => a + (Number(x.amount) || 0), 0)); };
+  const capLeft = (c) => Math.max(0, round2c(Number(c.amount) - capSpent(c.cat)));
+  const capHoldSum = () => round2c(capsOn().reduce((a, c) => a + capLeft(c), 0));
+  const syncCaps = () => { S.capHold = capHoldSum(); };
   // 取っておくお金の増減を、日付つきで残す
   // 入ったお金から、決めた割合（税金など）を自動で「取っておくお金」に足す。入金ごとに足した額を taxed に覚えておき、直す・消す時に戻す
   const roundC = (x) => { const m = Math.pow(10, dec()); return Math.round(x * m) / m; };
@@ -245,7 +251,7 @@
     hero.append(raw("p", "sub", tt("This is an estimate of what you have left to spend today on things like food and household items. If it feels like too much, add money you want to leave untouched under “Money you keep aside”.", "食費や日用品など、今日使うお金ぜんぶの枠です。多く感じる時は、手をつけたくない分を「取っておくお金」に入れてください。")), button(tt("Set money aside", "取っておくお金を入れる"), "link", () => { tab = "settings"; render(); setTimeout(() => { const f1 = document.getElementById("keep-block"); if (f1) f1.scrollIntoView({ block: "center" }); }, 50); }), button(tt("Change the picture", "絵を変える"), "link", () => { tab = "settings"; render(); setTimeout(() => { const f2 = document.getElementById("c-art"); if (f2) f2.scrollIntoView({ block: "center" }); }, 50); }));
     hero.append(button("Re-enter how much money you have now", "link", () => { if (rsRef) { rsRef.open = true; rsRef.scrollIntoView({ behavior: "smooth", block: "center" }); const nbx = rsRef.querySelector("input"); if (nbx) nbx.focus(); } }));
     const why = el("details", "card why"); why.append(raw("summary", null, tt("See how this is worked out", "どうやって出したか見る")));
-    const spentT = S.spends.filter((x) => x.date === t).reduce((a, x) => a + x.amount, 0), leftAfter = r.available + spentT - r.reserved - r.reservedNext - (S.keepAmount || 0), perDay = r.allowance;
+    const spentT = S.spends.filter((x) => x.date === t).reduce((a, x) => a + x.amount, 0), leftAfter = r.available + spentT - r.reserved - r.reservedNext - (S.keepAmount || 0) - (S.capHold || 0), perDay = r.allowance;
     (varMode() ? [
       tt("1. Money you have this morning: " + fmt(r.available + spentT), "① 今日の朝、持っていたお金：" + fmt(r.available + spentT)),
       tt("2. Look at each day ahead (about " + (r.daysLeft + (S.cushionDays == null ? 30 : S.cushionDays)) + " days" + (S.mode === "variable" ? ": the " + r.daysLeft + " days of your planning period plus " + (S.cushionDays == null ? 30 : S.cushionDays) + " extra days beyond it" : ": the days until payday plus " + (S.cushionDays == null ? 30 : S.cushionDays) + " extra days") + "). This is only how far ahead the app looks, not how long your money lasts. For each day, take away the bills due by then" + ((S.keepAmount > 0) ? " and the money you keep untouched (" + fmt(S.keepAmount) + ")" : "") + ", and divide what is left by the number of days up to that day.", "② これから約" + (r.daysLeft + (S.cushionDays == null ? 30 : S.cushionDays)) + "日分（" + (S.mode === "variable" ? "見通しの" + r.daysLeft + "日＋その先の" : "次の給料日までの" + r.daysLeft + "日＋その先の") + (S.cushionDays == null ? 30 : S.cushionDays) + "日）を、1日ずつ見ます（これは見る範囲の長さで、お金が何日もつかとは別です）。その日までに払う請求" + ((S.keepAmount > 0) ? "と、手をつけずに残すお金（" + fmt(S.keepAmount) + "）" : "") + "を引いて、残りを、その日までの日数で割ります。"),
@@ -256,6 +262,7 @@
       tt("2. Take away " + BEFORE_EN() + ": " + fmt(r.reserved), "② 次にお金が入る日までに払う分を引きます：" + fmt(r.reserved)),
  r.reservedNext > 0 ? tt("2. Also keep the bills coming in the 30 days after that: " + fmt(r.reservedNext) + " (because you don’t know when money arrives)", "② その先の30日に払うお金も取っておく：" + fmt(r.reservedNext) + "（お金がいつ入るか分からないので、先に確保します）") : null,
       (S.keepAmount > 0) ? tt("2. Money set aside (savings, emergencies, and automatic tax set-asides): " + fmt(S.keepAmount), "② 取っておくお金（貯金・もしものため・税金の自動取り分）：" + fmt(S.keepAmount)) : null,
+      (S.capHold > 0) ? tt("Also set aside: the part of your spending caps still left this month (" + fmt(S.capHold) + ").", "あわせて、使いすぎ防止の枠のうち、今月まだ使える分（" + fmt(S.capHold) + "）も先によけます。") : null,
       tt("3. Daily amount: what is left (" + fmt(leftAfter) + ") shared over " + r.daysLeft + " days, adjusted for any limit you set: " + fmt(Math.floor(perDay * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec())), "③ 1日分：残りの " + fmt(leftAfter) + " を " + r.daysLeft + "日で分けた額（自分で決めた上限があれば、それに合わせます）：" + fmt(Math.floor(perDay * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec()))),
       tt("4. Take away what you already spent today (" + fmt(spentT) + "). The rest is “Money you can use today”.", "④ 今日もう使ったお金（" + fmt(spentT) + "）を引く。残りが「今日使えるお金」です。")
     ]).filter(Boolean).forEach((x) => why.append(raw("p", "sub", x)));
@@ -310,8 +317,14 @@
       row(varMode() ? (() => { const ed = fmtDate(E.fromDays(E.toDays(t) + r.daysLeft + (S.cushionDays == null ? 30 : S.cushionDays) - 1)); return tt("Bills due by " + ed + " + amounts for future bills", "この先、" + ed + "までに払うお金（先によける支払い分も含む）"); })() : tt("Bills due before payday (" + fmtDate(r.payday) + ") + amounts for future bills", "次にお金が入る日（" + fmtDate(r.payday) + "）の前日までに払うお金（先によける支払い分も含む）"), "−" + fmt(bills), "", { go: () => { tab = "bills"; render(); } });
       { const ks = S.keeps || [], one = ks.length <= 1 ? (ks[0] || { id: uid(), name: tt("Set aside", "取っておく"), amount: 0 }) : null;
         row(tt("Set aside", "取っておくお金"), "−" + fmt(keep), "", one ? { node: (() => { const w = el("span"); w.append("−", keepEdit(one, !ks.length)); return w; })() } : { go: () => { tab = "settings"; render(); } });
-        ks.filter((k) => Number(k.amount) > 0).forEach((k) => row("　" + k.name, fmt(k.amount), "sub2", { node: keepEdit(k, false) })); }
-      row(varMode() ? tt("Left after upcoming bills and set-asides", "払うお金と取っておくお金を引いた残り") : tt("Left to use until payday", "次にお金が入る日までに使えるお金"), fmt(roundC(roundC(r.available) - bills - keep)), "total");
+        ks.filter((k) => Number(k.amount) > 0).forEach((k) => { row("　" + k.name, fmt(k.amount), "sub2", { node: keepEdit(k, false) });
+          const tg = Number(k.target) || 0;
+          if (tg > 0) { const pct = Math.min(100, Math.floor((Number(k.amount) / tg) * 100)), done = Number(k.amount) >= tg;
+            const gd = el("div", "mrow sub2 goalrow"); gd.setAttribute("data-goal", k.id);
+            const bar = el("div"); bar.style.cssText = "flex:1;height:8px;border-radius:4px;background:#e4ddd0;overflow:hidden;margin-right:10px"; const fillb = el("div"); fillb.style.cssText = "height:100%;width:" + pct + "%;background:#1f6f5c"; bar.append(fillb);
+            gd.append(bar, raw("span", null, done ? tt("Goal reached (" + fmt(tg) + ")", "目標に届きました（" + fmt(tg) + "）") : tt(pct + "% of " + fmt(tg), "目標 " + fmt(tg) + " の " + pct + "%"))); mc.append(gd); } }); }
+      if ((S.capHold || 0) > 0) row(tt("Set aside for spending caps (still left this month)", "使いすぎ防止の枠（今月まだ使える分）"), "−" + fmt(S.capHold), "", { go: () => { tab = "settings"; render(); } });
+      row(varMode() ? tt("Left after upcoming bills and set-asides", "払うお金と取っておくお金を引いた残り") : tt("Left to use until payday", "次にお金が入る日までに使えるお金"), fmt(roundC(roundC(r.available) - bills - keep - (S.capHold || 0))), "total");
       mc.append(button(tt("Change what I set aside", "取っておくお金を変える"), "link", () => { tab = "settings"; render(); }), button(tt("Bills by pay period", varMode() ? "期間ごとの支払い" : "給料日ごとの支払い"), "link", () => { tab = "plan"; planMode = "pay"; render(); }));
       view.append(mc);
     }
@@ -695,7 +708,12 @@
         const nm = input("kn-" + k.id, "text", k.name, { placeholder: tt("Name", "名前") }), am = input("ka-" + k.id, "number", k.amount, { min: 0, step: "any", placeholder: "0" });
         nm.addEventListener("change", () => { k.name = nm.value.trim() || tt("Set aside", "取っておく"); save(); render(); });
         am.addEventListener("change", () => { const nv = Math.max(0, Number(am.value) || 0); logKeep(k.name, k.amount, nv); k.amount = nv; syncKeep(); save(); render(); });
-        r1.append(nm, am, button(tt("Remove", "削除"), "link danger", () => { logKeep(k.name, k.amount, 0, true); S.keeps = S.keeps.filter((x) => x.id !== k.id); syncKeep(); save(); render(); }));
+        const ta = input("kt-" + k.id, "number", k.target || 0, { min: 0, step: "any", placeholder: tt("Goal (optional)", "目標額（なくてもOK）") }); ta.setAttribute("aria-label", tt("Goal amount (optional, 0 = none)", "目標額（なくてもOK、0＝なし）"));
+        ta.addEventListener("change", () => { const nv = Math.max(0, Number(ta.value) || 0); if (nv > 0) k.target = nv; else delete k.target; save(); render(); });
+        const wrapA = el("div"), wrapT = el("div"); wrapA.style.cssText = wrapT.style.cssText = "flex:1;min-width:7.5em";
+        const la = raw("small", "sub", tt("Amount now", "いまの額")), lt = raw("small", "sub", tt("Goal (optional)", "目標額（なくてもOK）")); la.style.display = lt.style.display = "block";
+        wrapA.append(la, am); wrapT.append(lt, ta); am.style.cssText = ta.style.cssText = "width:100%;min-width:0";
+        r1.append(nm, wrapA, wrapT, button(tt("Remove", "削除"), "link danger", () => { logKeep(k.name, k.amount, 0, true); S.keeps = S.keeps.filter((x) => x.id !== k.id); syncKeep(); save(); render(); }));
         kb.append(r1);
       });
       kb.append(raw("p", "sub", tt("Total set aside: " + fmt(keepSum()), "取っておくお金の合計：" + fmt(keepSum()))));
@@ -707,6 +725,19 @@
         kb.append(hd);
       }
       gB.insertBefore(kb, gB.firstChild);
+    }
+    { // 使いすぎ防止の枠（なくてもOK）
+      const cb = el("details", "more"); if (capsOn().length) cb.open = true;
+      cb.append(raw("summary", null, tt("Spending caps (optional)", "使いすぎ防止の枠（なくてもOK）")));
+      cb.append(raw("p", "sub", tt("Set a monthly amount for a type of spending, such as Food. The app sets aside what is still left in that cap, so today’s amount stays honest. Spending inside a cap does not lower today’s amount. Going over a cap does. Leave it at 0 for no cap.", "「食費は月○円まで」のように、使い道ごとに月の枠を決められます。枠の中でまだ使える分は、先によけておきます。枠の中で使っても、今日使えるお金は変わりません。枠を超えると、減ります。0のままなら、枠なしです。")));
+      CATS.forEach((c) => {
+        const cur = (S.caps || []).find((x) => x.cat === c), r1 = el("div", "keeprow");
+        const am = input("cap-" + c, "number", cur ? cur.amount : 0, { min: 0, step: "any", placeholder: "0" });
+        am.addEventListener("change", () => { const nv = Math.max(0, Number(am.value) || 0); S.caps = (S.caps || []).filter((x) => x.cat !== c); if (nv > 0) S.caps.push({ cat: c, amount: nv }); save(); render(); });
+        const lb = raw("span", null, tr(c)); lb.style.cssText = "min-width:7.5em;flex:0 0 auto"; r1.append(lb, am); cb.append(r1);
+      });
+      if (capsOn().length) cb.append(raw("p", "sub", tt("Still available in your caps this month: " + fmt(capHoldSum()), "今月、枠の中でまだ使える分：" + fmt(capHoldSum()))));
+      gB.insertBefore(cb, gB.firstChild ? gB.firstChild.nextSibling : null);
     }
     { // 口座ごとの内訳（なくてもOK）
       const ab = el("details", "more"); if ((S.accounts || []).length) ab.open = true;
@@ -781,6 +812,7 @@
   const ART = [["E2", "Treasure ship", "宝船", "A treasure ship is a New Year symbol of good fortune."], ["E4", "Koi carp", "錦鯉", "A symbol of perseverance and success."], ["F1", "Mallet and rice bales", "小槌と米俵", "A lucky mallet and rice bales are symbols of abundance."], ["H1", "Red and white cord", "水引", "Mizuhiki is a decorative paper cord used on gifts."], ["H3", "Lucky bell", "福の鈴", "A small bell whose ring is said to invite good luck."], ["H5", "Temari balls", "手まり", "Temari are decorative balls often given as gifts."], ["Q1", "Camellias", "椿", "Camellias bring color to the colder months."], ["Q9", "Paper lanterns", "提灯", "Paper lanterns add light to Japanese festivals."], ["R1", "Fireworks over the sea", "海辺の花火", "Summer festival fireworks: a bright celebration."], ["R5", "Autumn pagoda", "紅葉と五重塔", "A five-story pagoda surrounded by autumn leaves."], ["R8", "Snowy golden pavilion", "雪の楼閣と椿", "A golden pavilion in a peaceful winter scene."], ["S1b", "Waves and lightning", "藍の波と雷", "Rolling waves and lightning create a lively pattern."], ["S4", "Silver and blue rings", "銀と青の七宝", "Linked rings (shippo) stand for harmony and lasting ties."], ["S5", "Woven cords", "えんじの組紐", "Kumihimo is a traditional Japanese braided cord."]];
   const artId = () => (ART.some((a) => a[0] === S.art) ? S.art : "E2");
   function render() {
+    syncCaps();
     document.documentElement.setAttribute("data-art", artId());
     if (!S.setup && !S.noSample) applySample(); taxCatchUp(); { const tk = (S.keeps || []).find((x) => x.id === "tax"); if (tk && (tk.name === "税金（自動）" || tk.name === "Tax (auto)")) tk.name = tt("Tax (auto)", "税金（自動）"); }
     demoBar(); view.textContent = "";
