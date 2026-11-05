@@ -188,7 +188,7 @@
   function setupView() {
     const c = el("section", "card");
     const top = el("div", "row"); top.append(el("h2", null, "Let’s set up (1 minute)")); const ls = langSelect(); ls.style.width = "auto"; ls.style.minWidth = "0"; top.append(ls); c.append(top);
-    { const pr = el("div", "promise"); pr.append(raw("p", "promisebig", tt("Stop overspending. Know how much you need to earn each month.", "使いすぎを防ぐ。毎月いくら入れば暮らせるかが、すぐ分かる。")), raw("p", "sub", tt("Made for people who find money maths hard or tend to spend too much. Type in what you have and what you pay. The app tells you how much you can use today.", "計算が苦手な人、つい使いすぎてしまう人のためのアプリです。いま持っているお金と、払うお金を入れると、今日使っていいお金を教えてくれます。"))); c.append(pr); }
+    { const pr = el("div", "promise"); pr.append(raw("p", "promisebig", tt("One number: what you can spend today.", "ひとつの数字で、今日使えるお金が分かる。")), raw("p", "sub", tt("Made for people who find money maths hard or tend to spend too much. Type in what you have and what you pay. The app tells you how much you can use today.", "計算が苦手な人、つい使いすぎてしまう人のためのアプリです。いま持っているお金と、払うお金を入れると、今日使っていいお金を教えてくれます。"))); c.append(pr); }
     c.append(el("p", "sub", "Four things. You can change them any time. Nothing leaves this device."));
     const f = el("div"); f.style.cssText = "display:flex;flex-direction:column;gap:12px;margin-top:12px";
     const bal = input("s-bal", "text", "", { inputmode: "decimal", placeholder: ph("e.g. 850", "例：85000") });
