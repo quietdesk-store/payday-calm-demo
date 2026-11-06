@@ -262,7 +262,7 @@
       tt("2. Take away " + BEFORE_EN() + ": " + fmt(r.reserved), "② 次にお金が入る日までに払う分を引きます：" + fmt(r.reserved)),
  r.reservedNext > 0 ? tt("2. Also keep the bills coming in the 30 days after that: " + fmt(r.reservedNext) + " (because you don’t know when money arrives)", "② その先の30日に払うお金も取っておく：" + fmt(r.reservedNext) + "（お金がいつ入るか分からないので、先に確保します）") : null,
       (S.keepAmount > 0) ? tt("2. Money set aside (savings, emergencies, and automatic tax set-asides): " + fmt(S.keepAmount), "② 取っておくお金（貯金・もしものため・税金の自動取り分）：" + fmt(S.keepAmount)) : null,
-      (S.capHold > 0) ? tt("Also set aside: the part of your spending caps still left this month (" + fmt(S.capHold) + ").", "あわせて、使いすぎ防止の枠のうち、今月まだ使える分（" + fmt(S.capHold) + "）も先によけます。") : null,
+      (S.capHold > 0) ? tt("Also excluded: the unused amount across your spending caps this month (" + fmt(S.capHold) + ").", "あわせて、使いすぎ防止の枠のうち、今月まだ使える分（" + fmt(S.capHold) + "）も先によけます。") : null,
       tt("3. Daily amount: what is left (" + fmt(leftAfter) + ") shared over " + r.daysLeft + " days, adjusted for any limit you set: " + fmt(Math.floor(perDay * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec())), "③ 1日分：残りの " + fmt(leftAfter) + " を " + r.daysLeft + "日で分けた額（自分で決めた上限があれば、それに合わせます）：" + fmt(Math.floor(perDay * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec()))),
       tt("4. Take away what you already spent today (" + fmt(spentT) + "). The rest is “Money you can use today”.", "④ 今日もう使ったお金（" + fmt(spentT) + "）を引く。残りが「今日使えるお金」です。")
     ]).filter(Boolean).forEach((x) => why.append(raw("p", "sub", x)));
@@ -322,8 +322,8 @@
           if (tg > 0) { const pct = Math.min(100, Math.floor((Number(k.amount) / tg) * 100)), done = Number(k.amount) >= tg;
             const gd = el("div", "mrow sub2 goalrow"); gd.setAttribute("data-goal", k.id);
             const bar = el("div"); bar.style.cssText = "flex:1;height:8px;border-radius:4px;background:#e4ddd0;overflow:hidden;margin-right:10px"; const fillb = el("div"); fillb.style.cssText = "height:100%;width:" + pct + "%;background:#1f6f5c"; bar.append(fillb);
-            gd.append(bar, raw("span", null, done ? tt("Goal reached (" + fmt(tg) + ")", "目標に届きました（" + fmt(tg) + "）") : tt(pct + "% of " + fmt(tg), "目標 " + fmt(tg) + " の " + pct + "%"))); mc.append(gd); } }); }
-      if ((S.capHold || 0) > 0) row(tt("Set aside for spending caps (still left this month)", "使いすぎ防止の枠（今月まだ使える分）"), "−" + fmt(S.capHold), "", { go: () => { tab = "settings"; render(); } });
+            gd.append(bar, raw("span", null, done ? tt("Goal reached (" + fmt(tg) + ")", "目標に届きました（" + fmt(tg) + "）") : tt(pct + "% of your " + fmt(tg) + " goal", "目標 " + fmt(tg) + " の " + pct + "%"))); mc.append(gd); } }); }
+      if ((S.capHold || 0) > 0) row(tt("Unused spending caps this month", "使いすぎ防止の枠（今月まだ使える分）"), "−" + fmt(S.capHold), "", { go: () => { tab = "settings"; render(); } });
       row(varMode() ? tt("Left after upcoming bills and set-asides", "払うお金と取っておくお金を引いた残り") : tt("Left to use until payday", "次にお金が入る日までに使えるお金"), fmt(roundC(roundC(r.available) - bills - keep - (S.capHold || 0))), "total");
       mc.append(button(tt("Change what I set aside", "取っておくお金を変える"), "link", () => { tab = "settings"; render(); }), button(tt("Bills by pay period", varMode() ? "期間ごとの支払い" : "給料日ごとの支払い"), "link", () => { tab = "plan"; planMode = "pay"; render(); }));
       view.append(mc);
@@ -708,10 +708,10 @@
         const nm = input("kn-" + k.id, "text", k.name, { placeholder: tt("Name", "名前") }), am = input("ka-" + k.id, "number", k.amount, { min: 0, step: "any", placeholder: "0" });
         nm.addEventListener("change", () => { k.name = nm.value.trim() || tt("Set aside", "取っておく"); save(); render(); });
         am.addEventListener("change", () => { const nv = Math.max(0, Number(am.value) || 0); logKeep(k.name, k.amount, nv); k.amount = nv; syncKeep(); save(); render(); });
-        const ta = input("kt-" + k.id, "number", k.target || 0, { min: 0, step: "any", placeholder: tt("Goal (optional)", "目標額（なくてもOK）") }); ta.setAttribute("aria-label", tt("Goal amount (optional, 0 = none)", "目標額（なくてもOK、0＝なし）"));
+        const ta = input("kt-" + k.id, "number", k.target || 0, { min: 0, step: "any", placeholder: tt("Goal amount (optional)", "目標額（なくてもOK）") }); ta.setAttribute("aria-label", tt("Goal amount (optional, 0 = none)", "目標額（なくてもOK、0＝なし）"));
         ta.addEventListener("change", () => { const nv = Math.max(0, Number(ta.value) || 0); if (nv > 0) k.target = nv; else delete k.target; save(); render(); });
         const wrapA = el("div"), wrapT = el("div"); wrapA.style.cssText = wrapT.style.cssText = "flex:1;min-width:7.5em";
-        const la = raw("small", "sub", tt("Amount now", "いまの額")), lt = raw("small", "sub", tt("Goal (optional)", "目標額（なくてもOK）")); la.style.display = lt.style.display = "block";
+        const la = raw("small", "sub", tt("Amount set aside now", "いまの額")), lt = raw("small", "sub", tt("Goal amount (optional)", "目標額（なくてもOK）")); la.style.display = lt.style.display = "block";
         wrapA.append(la, am); wrapT.append(lt, ta); am.style.cssText = ta.style.cssText = "width:100%;min-width:0";
         r1.append(nm, wrapA, wrapT, button(tt("Remove", "削除"), "link danger", () => { logKeep(k.name, k.amount, 0, true); S.keeps = S.keeps.filter((x) => x.id !== k.id); syncKeep(); save(); render(); }));
         kb.append(r1);
@@ -729,14 +729,14 @@
     { // 使いすぎ防止の枠（なくてもOK）
       const cb = el("details", "more"); if (capsOn().length) cb.open = true;
       cb.append(raw("summary", null, tt("Spending caps (optional)", "使いすぎ防止の枠（なくてもOK）")));
-      cb.append(raw("p", "sub", tt("Set a monthly amount for a type of spending, such as Food. The app sets aside what is still left in that cap, so today’s amount stays honest. Spending inside a cap does not lower today’s amount. Going over a cap does. Leave it at 0 for no cap.", "「食費は月○円まで」のように、使い道ごとに月の枠を決められます。枠の中でまだ使える分は、先によけておきます。枠の中で使っても、今日使えるお金は変わりません。枠を超えると、減ります。0のままなら、枠なしです。")));
+      cb.append(raw("p", "sub", tt("Set a monthly cap for each type of spending, such as Food. The app excludes the unused part of each cap when estimating what you can spend today. Spending within a cap does not reduce your remaining amount for today; spending above it does. The app does not prevent purchases or move money. Leave a cap at 0 if you do not want to use it.", "「食費は月○円まで」のように、使い道ごとに月の枠を決められます。枠の中でまだ使える分は、先によけておきます。枠の中で使っても、今日使えるお金は変わりません。枠を超えると、減ります。0のままなら、枠なしです。")));
       CATS.forEach((c) => {
         const cur = (S.caps || []).find((x) => x.cat === c), r1 = el("div", "keeprow");
         const am = input("cap-" + c, "number", cur ? cur.amount : 0, { min: 0, step: "any", placeholder: "0" });
         am.addEventListener("change", () => { const nv = Math.max(0, Number(am.value) || 0); S.caps = (S.caps || []).filter((x) => x.cat !== c); if (nv > 0) S.caps.push({ cat: c, amount: nv }); save(); render(); });
         const lb = raw("span", null, tr(c)); lb.style.cssText = "min-width:7.5em;flex:0 0 auto"; r1.append(lb, am); cb.append(r1);
       });
-      if (capsOn().length) cb.append(raw("p", "sub", tt("Still available in your caps this month: " + fmt(capHoldSum()), "今月、枠の中でまだ使える分：" + fmt(capHoldSum()))));
+      if (capsOn().length) cb.append(raw("p", "sub", tt("Unused amount across your caps this month: " + fmt(capHoldSum()), "今月、枠の中でまだ使える分：" + fmt(capHoldSum()))));
       gB.insertBefore(cb, gB.firstChild ? gB.firstChild.nextSibling : null);
     }
     { // 口座ごとの内訳（なくてもOK）
