@@ -104,7 +104,7 @@
   function migrate(s) {
     // 壊れた形でも画面が止まらないように、形をそろえる
     const D8 = /^\d{4}-\d{2}-\d{2}$/, td = todayStr(), arr = (x) => (Array.isArray(x) ? x.filter((i) => i && typeof i === "object") : []);
-    ["income", "spends", "bills", "paid", "favs", "accounts", "keepLog"].forEach((k) => { s[k] = arr(s[k]); });
+    ["income", "spends", "bills", "paid", "favs", "accounts", "keepLog", "hideUsual"].forEach((k) => { s[k] = arr(s[k]); });
     if (s.keeps != null && !Array.isArray(s.keeps)) s.keeps = [];
     if (Array.isArray(s.keeps)) s.keeps = arr(s.keeps);
     const amt = (o) => { o.amount = Number(o.amount) || 0; };
@@ -376,7 +376,7 @@
     add.style.width = "100%";
     const cnt = {}; S.spends.forEach((x) => { const k = x.cat + "|" + x.amount; cnt[k] = (cnt[k] || 0) + 1; });
     const favKeys = (S.favs || []).map((f) => f.cat + "|" + f.amount);
-    const often = Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x]).filter((k) => cnt[k] >= 2);
+    const often = Object.keys(cnt).sort((x, y) => cnt[y] - cnt[x]).filter((k) => cnt[k] >= 2 && (S.hideUsual || []).indexOf(k) < 0);
     const usual = favKeys.concat(often.filter((k) => favKeys.indexOf(k) < 0)).slice(0, 6);
     if (usual.length) {
       lg.append(raw("h3", "sec", tt("Usual spending", "いつもの支出")), raw("p", "sub", tt("Tap once to log a saved amount", "1回押すと、保存した金額が記録されます")));
@@ -389,7 +389,7 @@
           S.spends.push({ id: uid(), date: todayStr(), amount: Number(oa), cat: oc, ts: Date.now() }); save(); flash = ""; render();
         });
         const tx = el("span", "tx"); tx.append(raw("span", "nm", tr(oc)), raw("span", "am", fmt(Number(oa)))); ub.append(icon(oc), tx); wrap.append(ub);
-        if (favKeys.indexOf(k) >= 0) { const x = button("✕", "link xbtn", () => { S.favs = S.favs.filter((f) => f.cat + "|" + f.amount !== k); save(); render(); }); x.setAttribute("aria-label", tt("Remove", "削除")); wrap.append(x); }
+        { const x = button("✕", "link xbtn", () => { if (favKeys.indexOf(k) >= 0) S.favs = S.favs.filter((f) => f.cat + "|" + f.amount !== k); else { S.hideUsual = S.hideUsual || []; S.hideUsual.push(k); } save(); render(); }); x.setAttribute("aria-label", tt("Remove from usual spending (your records stay)", "いつもの支出から消す（記録は残ります）")); wrap.append(x); }
         orow.append(wrap);
       });
       lg.append(orow);
