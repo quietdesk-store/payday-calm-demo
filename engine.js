@@ -189,7 +189,7 @@
     const safeToday = Math.max(0, round2(perDay - spentEff));
     return {
       today, available: round2(available), reserved, reservedNext, free, daysLeft, payday, paydayPassed,
-      allowance: perDay, safeToday, overToday: spentEff > perDay ? round2(spentEff - perDay) : 0, capHold: round2(capHold - capAbsorbed),
+      allowance: perDay, safeToday, overToday: spentEff > perDay ? round2(spentEff - perDay) : 0, capHold: round2(capHold - capAbsorbed), capAbsorbed,
       shortfall: shortDate ? shortAmount : (state.mode !== "variable" && free < 0) ? round2(-free) : 0, overdue, overdueList, spentToday: round2(spentToday), comingSoon, dueList,
       shortDate, shortAmount, limitDay, capped, budgetPerDay, monthlyBills,
       status: state.mode === "variable" ? (shortDate ? "over" : perDay <= 0 ? "none" : "ok") : (free < 0 ? "over" : freeStart <= 0 ? "none" : "ok"),
