@@ -103,24 +103,25 @@
       daysLeft = Math.max(1, Number(state.windowDays) || 14);
       horizonEnd = fromDays(toDays(today) + daysLeft - 1);
     } else {
-      const np = state.payday ? nextPayday(state.payday, state.cycle || "biweekly", today) : { date: fromDays(toDays(today) + 14), passed: false };
+      const np = state.payday ? nextPayday(state.payday, state.cycle || "biweekly", today, Number(state.paydayDay) || 0) : { date: fromDays(toDays(today) + 14), passed: false };
       payday = np.date; paydayPassed = np.passed;
       daysLeft = Math.max(1, toDays(payday) - toDays(today));
       horizonEnd = fromDays(toDays(payday) - 1);
     }
 
-    // 残高を入れた日の翌日から昨日までに来たのに「払った」を押していない請求は、まだ払っていない（または払ったか分からない）お金として取っておく
-    const yesterday = fromDays(toDays(today) - 1), odFrom = fromDays(toDays(asOf) + 1);
+    // 残高を入れた日から昨日までに来たのに「払った」を押していない請求は、まだ払っていない（または払ったか分からない）お金として取っておく
+    const yesterday = fromDays(toDays(today) - 1), odFrom = asOf; // 残高を入れた日の分も含める（その日に「払った」を押さずに日をまたいだら、払っていない分として残す）
     const cd = state.mode === "variable" ? (state.cushionDays == null ? 30 : Math.max(0, Number(state.cushionDays) || 0)) : 0;
     const outerEnd = fromDays(toDays(horizonEnd) + cd);
     // 見通しの間に出ていく請求。数か月に1回のものは、見る期間全体で1回も来なければ「月割り」を取り分ける（終わった支払いは除く）
-    let reserved = 0, overdue = 0; const dueList = [], overdueList = [];
+    let reserved = 0, overdue = 0, prorated = 0; const dueList = [], overdueList = [];
     for (const b of state.bills || []) {
-      if (toDays(odFrom) <= toDays(yesterday)) duesBetween(b, odFrom, yesterday).forEach((d) => { overdue += Number(b.amount) || 0; overdueList.push({ id: b.id, name: b.name, date: d, amount: Number(b.amount) || 0 }); });
+      const odF = b.odFrom && /^\d{4}-\d{2}-\d{2}$/.test(b.odFrom) && toDays(b.odFrom) < toDays(odFrom) ? b.odFrom : odFrom; // 入れ直す前から残っていた「払っていない分」は、入れ直しても消さない
+      if (toDays(odF) <= toDays(yesterday)) duesBetween(b, odF, yesterday).forEach((d) => { overdue += Number(b.amount) || 0; overdueList.push({ id: b.id, name: b.name, date: d, amount: Number(b.amount) || 0 }); });
       const dues = duesBetween(b, today, horizonEnd);
       if (dues.length) { reserved += dues.length * Number(b.amount); dues.forEach((d) => dueList.push({ name: b.name, date: d, amount: Number(b.amount) })); }
       else if (monthsOf(b.every) > 1 && nextDue(b, today) && !duesBetween(b, today, outerEnd).length) {
-        reserved += (Number(b.amount) / monthsOf(b.every)) * (daysLeft / 30); // 月割りの取り分
+        { const pv = (Number(b.amount) / monthsOf(b.every)) * (daysLeft / 30); reserved += pv; prorated += pv; } // 月割りの取り分（収入がバラバラのモードでは、今日の額の計算でも先に引く）
       }
     }
     reserved = round2(reserved + overdue); overdue = round2(overdue);
@@ -154,15 +155,28 @@
     // 収入がバラバラのモード：「先の日ごと」に、そこまでの請求を払っても足りるかを確かめ、いちばん厳しい日に合わせる。
     // （入金済みのお金だけを数える。希望の上限 dailyCap があれば、それを超えない）
     let limit = perDay, shortDate = null, shortAmount = 0, limitDay = null;
+    let handLimit = null;
     if (state.mode === "variable") {
       const H = daysLeft + (state.cushionDays == null ? 30 : Math.max(0, Number(state.cushionDays) || 0));
-      const lastDay = fromDays(toDays(today) + H - 1), keep = (Number(state.keepAmount) || 0) + capHold;
+      const lastDay = fromDays(toDays(today) + H - 1), keep = (Number(state.keepAmount) || 0) + capHold + prorated;
       const events = overdue > 0 ? [{ d: today, a: overdue }] : [];
       for (const b of state.bills || []) duesBetween(b, today, lastDay).forEach((d) => events.push({ d, a: Number(b.amount) }));
       const start = available + spentToday;
       // 「ふつうの月に入るお金の目安」があれば、それが、月に1回、入金の遅れ（既定30日）を見込んだ日に入るものとして、お金が足りるかを確かめる
       const mi0 = Number(state.monthlyIncome) || 0, delay = state.incomeDelayDays == null ? 30 : Math.max(1, Number(state.incomeDelayDays) || 30);
       if (mi0 > 0) for (let k = delay; k <= H; k += 30) events.push({ d: fromDays(toDays(today) + k - 1), a: -mi0 });
+      let limitHand = Infinity;
+      { const evH = events.filter((e) => e.a >= 0);
+        for (let t = 1; t <= H; t++) {
+          const day = fromDays(toDays(today) + t - 1);
+          const need = evH.filter((e) => toDays(e.d) <= toDays(day)).reduce((a, e) => a + e.a, 0);
+          const left = start - need - keep;
+          if (left < 0) { limitHand = 0; break; }
+          const v = Math.floor((left / t) * 100 + 1e-6) / 100;
+          if (v < limitHand) limitHand = v;
+        }
+        if (!isFinite(limitHand)) limitHand = 0; }
+      handLimit = limitHand;
       limit = Infinity;
       for (let t = 1; t <= H; t++) {
         const day = fromDays(toDays(today) + t - 1);
@@ -183,6 +197,7 @@
     const budgetPerDay = state.mode === "variable" && mi > 0 ? Math.max(0, Math.floor(((mi - monthlyBills - (Number(state.monthlySetAside) || 0)) / 30) * 100 + 1e-6) / 100) : null;
     let capped = false;
     if (budgetPerDay != null && budgetPerDay < perDay) { perDay = budgetPerDay; capped = "budget"; }
+    if (budgetPerDay != null && handLimit != null && handLimit < perDay) { perDay = handLimit; capped = false; } // 2026-11-10 取っておくお金・持っているお金を変えたら、今日の金額も必ず変わる（月の収入の目安は上限としてだけ使う）
     const cap = Number(state.dailyCap) || 0;
     if (cap > 0 && perDay > cap) { perDay = cap; capped = true; }
     const spentEff = round2(spentToday - capAbsorbed); // 枠の中で使った分は数えない
