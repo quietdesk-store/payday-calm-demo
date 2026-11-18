@@ -23,6 +23,16 @@
   const view = $("#view");
   let tab = "today", cat = "Food", flash = "";
   let odAsk = null; // 入れ直した時に残っていた「払っていない分」。銀行の額にもう入っているかを1回だけ聞く
+  let overdueChoiceId = null, incomeChoiceId = null;
+  // 支払い日を動かしても、すでに払った同じ回を未払いとして再計上しない
+  function rebasePaidOccurrence(b, nextDue) {
+    const oldDue = b.due;
+    if (b.paidThrough && b.paidThrough === oldDue) {
+      (S.paid || []).forEach((p) => { if (p.billId === b.id && p.for === oldDue) p.for = nextDue; });
+      b.paidThrough = nextDue;
+    }
+    b.due = nextDue;
+  }
   // 持っているお金を入れ直す前に呼ぶ。払っていない分を、入れ直しても消さないように、数え始めの日を各支払いに覚えておく
   function keepOd(ask) { const a = S.balance && S.balance.asOf; if (!a) return; let ol = []; try { ol = E.compute(S, todayStr()).overdueList || []; } catch (e) { ol = []; } (S.bills || []).forEach((b) => { if (!b.odFrom || b.odFrom > a) b.odFrom = a; }); odAsk = ask && ol.length ? ol : null; }
 
@@ -125,7 +135,7 @@
   const syncKeep = () => { S.keepAmount = keepSum(); };
   /* 使いすぎ防止の枠（任意）：カテゴリごとの月の枠。今月まだ使える分を先によける */
   const capsOn = () => (S.caps || []).filter((c) => Number(c.amount) > 0);
-  const capSpent = (cat) => { const m = todayStr().slice(0, 7); return round2c(S.spends.filter((x) => x.cat === cat && String(x.date).slice(0, 7) === m).reduce((a, x) => a + (Number(x.amount) || 0), 0)); };
+  const capSpent = (cat) => { const m = todayStr().slice(0, 7); return round2c(S.spends.filter((x) => x.historyOnly !== true && x.cat === cat && String(x.date).slice(0, 7) === m).reduce((a, x) => a + (Number(x.amount) || 0), 0)); };
   const capLeft = (c) => Math.max(0, round2c(Number(c.amount) - capSpent(c.cat)));
   const capHoldSum = () => round2c(capsOn().reduce((a, c) => a + capLeft(c), 0));
   const syncCaps = () => { S.capHold = capHoldSum(); };
@@ -277,6 +287,12 @@
   function changeMsg(kind, b, a) { const B = fmt(b), A = fmt(a), keep = kind === "keep";
     if (b !== a) return keep ? tt("Money to keep aside updated; today’s estimated amount left to spend: " + B + " → " + A + ".", "いま残しておくお金を直し、今日あと使えるお金の目安が " + B + " → " + A + " に変わりました。") : tt("Money you have now updated; today’s estimated amount left to spend: " + B + " → " + A + ".", "いま持っているお金を直し、今日あと使えるお金の目安が " + B + " → " + A + " に変わりました。");
     return keep ? tt("Money to keep aside updated, but today’s estimated amount left to spend remains " + A + ".", "いま残しておくお金を直しましたが、今日あと使えるお金の目安は" + A + "のままです。") : tt("Money you have now updated, but today’s estimated amount left to spend remains " + A + ".", "いま持っているお金を直しましたが、今日あと使えるお金の目安は" + A + "のままです。"); }
+  function goRecord() { if (tab === "today") { const c1 = document.getElementById("home-rec"), a1 = document.getElementById("h-amt"); if (c1 && a1) { c1.scrollIntoView({ behavior: "smooth", block: "center" }); setTimeout(() => { try { a1.focus({ preventScroll: true }); } catch (e) {} }, 350); return; } } tab = "month"; monthOffset = 0; flash = ""; render(); setTimeout(() => { const c0 = document.getElementById("rec-card"); if (c0) { c0.scrollIntoView({ behavior: "smooth", block: "start" }); const a = document.getElementById("l-amt"); if (a) setTimeout(() => { try { a.focus({ preventScroll: true }); } catch (e) {} }, 350); } }, 50); }
+  function budgetSwitch() {
+    const w = el("div", "row budgetswitch"); w.style.cssText = "gap:8px;margin:0 0 12px;flex-wrap:nowrap";
+    [["month", tt("Spending", "使ったお金"), () => { tab = "month"; monthOffset = 0; flash = ""; render(); }], ["bills", tt("Payments", "支払い予定"), () => { tab = "bills"; flash = ""; render(); }], ["income", tt("Income", "収入"), () => { tab = "income"; flash = ""; render(); }]].forEach((x) => { const b = button(x[1], tab === x[0] ? "primary" : "", x[2]); b.style.cssText = "flex:1 1 0;min-width:0;white-space:normal;padding-left:6px;padding-right:6px"; if (tab === x[0]) b.setAttribute("aria-current", "page"); w.append(b); });
+    return w;
+  }
   function goMoneyNow() { tab = "settings"; render(); setTimeout(() => { const c0 = document.getElementById("money-now"); if (c0) { c0.scrollIntoView({ behavior: "smooth", block: "start" }); const i0 = c0.querySelector(".tapnum, input"); if (i0) setTimeout(() => i0.focus({ preventScroll: true }), 300); } }, 50); }
   function moneyCard(t, r) {
     { // 全部のお金：いまある額 → 払うお金 → いま残しておくお金 → 給料日までに使える額
@@ -354,15 +370,17 @@
     const selNow = raw("p", "selnow", ""); const showSel = () => { selNow.textContent = tt("Selected category: ", "いま選んでいる分類：") + tr(cat); }; showSel();
     CATS.forEach((c) => { const b = button("", "catbtn" + (c === cat ? " on" : ""), () => { cat = c; showSel(); chips.querySelectorAll(".catbtn").forEach((x) => { x.classList.toggle("on", x.dataset.cat === c); x.setAttribute("aria-pressed", String(x.dataset.cat === c)); }); }); b.dataset.cat = c; b.setAttribute("aria-pressed", String(c === cat)); b.append(icon(c), raw("span", "nm", tr(c))); chips.append(b); });
     const dtl = el("details", "more"); dtl.append(raw("summary", null, tt("More details (date, note)", "くわしく入れる（日にち・メモ）")));
-    const dDate = input("l-date", "date", t, { max: t }), dMemo = input("l-memo", "text", "", { placeholder: tt("Note (optional)", "メモ（なくてもOK）"), maxlength: "80" });
+    const dDate = input("l-date", "date", t, { min: t, max: t }), dMemo = input("l-memo", "text", "", { placeholder: tt("Note (optional)", "メモ（なくてもOK）"), maxlength: "80" });
     dtl.append(field(tt("Date", "使った日"), dDate), field(tt("Note", "メモ"), dMemo));
+    const spendMessage = raw("p", "sub", ""); spendMessage.setAttribute("role", "status"); dtl.append(spendMessage); dDate.addEventListener("change", () => { spendMessage.textContent = ""; });
     amt.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add.click(); } });
     const favChk = el("input", null, null, { type: "checkbox", id: "l-fav" }); const favLab = el("label", "favchk"); favLab.setAttribute("for", "l-fav"); favLab.append(favChk, raw("span", null, tt("Add to usual spending", "いつもの支出に入れる")));
     const add = button("Add", "primary", () => {
       const a = num(amt.value);
       if (isNaN(a) || a <= 0) return say(tr("Type an amount, for example 4.50."));
       if (CFG.demo && S.spends.length >= CFG.demoLimit) return say(tr("You have " + CFG.demoLimit + " spending entries. Your entries are still here. Get the full app to add more."));
-      const nowD = todayStr(), dv = dDate.value && dDate.value !== t && dDate.value <= nowD ? dDate.value : nowD; S.spends.push({ id: uid(), date: dv, amount: a, cat, ts: Date.now(), memo: dMemo.value.trim() }); let favFull = false; if (favChk.checked) { S.favs = S.favs || []; if (!S.favs.some((f) => f.cat === cat && f.amount === a)) { if (S.favs.length >= 8) favFull = true; else S.favs.push({ cat, amount: a }); } S.hideUsual = (S.hideUsual || []).filter((k) => k !== cat + "|" + a); } save(); focusFlash = true; flash = tt("Saved. To edit it, go to “View or edit records.”", "記録しました。まちがえたら「今月の記録」で直せます。") + (favFull ? tt(" Usual spending is full (8). Remove one with ✕ to add this.", " 「いつもの支出」は8個までです。いっぱいなので入れませんでした。✕で1つ外すと入れられます。") : ""); render();
+      if (dDate.value && dDate.value < todayStr()) { spendMessage.textContent = tt("For past dates, use the calendar.", "過去の日の記録はカレンダーから入力してください。"); return; }
+      const nowD = todayStr(), dv = dDate.value && dDate.value !== t && dDate.value <= nowD ? dDate.value : nowD; S.spends.push({ id: uid(), date: dv, amount: a, cat, ts: Date.now(), historyOnly: dv < nowD && !!(S.balance && S.balance.asOf && dv <= S.balance.asOf), memo: dMemo.value.trim() }); let favFull = false; if (favChk.checked) { S.favs = S.favs || []; if (!S.favs.some((f) => f.cat === cat && f.amount === a)) { if (S.favs.length >= 8) favFull = true; else S.favs.push({ cat, amount: a }); } S.hideUsual = (S.hideUsual || []).filter((k) => k !== cat + "|" + a); } save(); focusFlash = true; flash = tt("Saved. To edit it, go to “View or edit records.”", "記録しました。まちがえたら「今月の記録」で直せます。") + (favFull ? tt(" Usual spending is full (8). Remove one with ✕ to add this.", " 「いつもの支出」は8個までです。いっぱいなので入れませんでした。✕で1つ外すと入れられます。") : ""); render();
     });
     add.style.width = "100%";
     const cnt = {}; S.spends.forEach((x) => { const k = x.cat + "|" + x.amount; cnt[k] = (cnt[k] || 0) + 1; });
@@ -433,7 +451,7 @@
     const t = todayStr(), r = E.compute(S, t);
     const hero = el("section", "card hero");
     hero.append(el("h1", null, "Money you can use today"));
-    { const fl = Math.floor(r.safeToday * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec()), bg = raw("div", "big" + (r.status === "over" ? " over" : ""), fmt(fl)); bg.setAttribute("data-len", String(fmt(fl).length)); hero.append(bg); }
+    { const fl = Math.floor(r.safeToday * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec()), bg = raw("div", "big" + (r.status === "over" ? " over" : ""), fmt(fl)); bg.setAttribute("data-len", String(fmt(fl).length)); bg.style.cursor = "pointer"; bg.setAttribute("role", "button"); bg.setAttribute("tabindex", "0"); bg.setAttribute("aria-label", tt("Record today’s spending", "今日使ったお金を記録")); bg.addEventListener("click", () => goRecord()); bg.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); goRecord(); } }); hero.append(bg); }
     { const sp0 = S.spends.filter((x) => x.date === t).reduce((q, x) => q + (Number(x.amount) || 0), 0), cap0 = Math.floor((Number(r.allowance) || 0) * Math.pow(10, dec()) + 1e-6) / Math.pow(10, dec()); if (sp0 > 0 && cap0 > 0) { const mt = el("div", "meter"); const mf = el("div", "meterfill"); const ab = Number(r.capAbsorbed) || 0, eff = Math.max(0, sp0 - ab); mf.style.width = Math.min(100, Math.round(eff / cap0 * 100)) + "%"; if (eff > cap0) mf.classList.add("over"); mt.append(mf); hero.append(mt, raw("p", "sub", tt("Spent today: " + fmt(sp0) + ". Today’s estimate: " + fmt(cap0) + ".", "今日使った額：" + fmt(sp0) + "（今日の目安：" + fmt(cap0) + "）") + (ab > 0 ? tt(" Of that, " + fmt(ab) + " was within your monthly spending caps, so it does not reduce today’s amount.", "。うち " + fmt(ab) + " は使い道ごとの月の上限の中なので、今日の額からは引きません。") : ""))); } }   // 今日の枠も切り捨て（今日使えるお金と同じ。四捨五入だと引き算が1円合わなかった）
     { const adv = adviceNote(r, t); if (adv) hero.append(adv); }
     hero.append(raw("p", "sub", S.mode === "variable" ? (r.limitDay && !r.capped && !(r.safeToday > 0) ? tt("Right now there is nothing left to use today after bills and money you keep aside.", "いまは、払うお金といま残しておくお金を引くと、今日使えるお金が残りません。") : r.limitDay && !r.capped ? (() => { const n = E.toDays(r.limitDay) - E.toDays(t) + 1; return tt("Planned to last " + n + " days (until " + fmtDate(r.limitDay) + "), even if no money comes in", "お金が入らなくても、" + n + "日先（" + fmtDate(r.limitDay) + "）までもつ額です"); })() : r.capped === "budget" ? tt("This estimate is based on your monthly income and bills.", "毎月の収入と支払いなどから出した目安です。") : r.capped ? tt("Your own daily limit", "自分で決めた1日分の金額です") : tt("Looking " + r.daysLeft + " days ahead", "これから" + r.daysLeft + "日分のお金で考えています")) : tt(r.daysLeft + (r.daysLeft === 1 ? " day" : " days") + " until payday", "次にお金が入る日まで、あと" + r.daysLeft + "日")));
@@ -466,6 +484,22 @@
     hero.append(moreHero);
     if (r.safeToday <= 0) hero.insertBefore(raw("p", "zero-explanation", tt("Your estimate is zero today. You can check the calculation and your amounts in Settings.", "今日の目安は0です。計算の説明と入れた金額は「設定」で見られます。")), moreHero);
     view.append(hero);
+    { // 今日使ったお金をホームですぐ記録（2026-11-17 本人指示）
+      const qc = el("section", "card"); qc.id = "home-rec"; qc.append(raw("h2", null, tt("Record today’s spending", "今日使ったお金を記録")));
+      const qa = input("h-amt", "text", "", { inputmode: "decimal", placeholder: tr("Amount"), "aria-label": tt("Amount you spent today", "今日使った金額") });
+      const qs = select("h-cat", Object.fromEntries(CATS.map((c) => [c, tr(c)])), cat);
+      const qm = input("h-memo", "text", "", { placeholder: tt("Note (optional)", "メモ（なくてもOK）"), maxlength: "80" });
+      const qf = el("input", null, null, { type: "checkbox", id: "h-fav" }); const qfl = el("label", "favchk"); qfl.setAttribute("for", "h-fav"); qfl.append(qf, raw("span", null, tt("Add to usual spending", "いつもの支出に入れる")));
+      const qd = el("details", "more"); qd.append(raw("summary", null, tt("More options", "くわしく入れる（メモ・いつもの支出）")), field(tt("Note", "メモ"), qm), qfl);
+      const qb = button(tt("Add", "記録する"), "primary", () => {
+        const a = num(qa.value);
+        if (isNaN(a) || a <= 0) return say(tr("Type an amount, for example 4.50."));
+        if (CFG.demo && S.spends.length >= CFG.demoLimit) return say(tr("You have " + CFG.demoLimit + " spending entries. Your entries are still here. Get the full app to add more."));
+        cat = qs.value; S.spends.push({ id: uid(), date: todayStr(), amount: a, cat, ts: Date.now(), historyOnly: false, memo: qm.value.trim() }); if (qf.checked) { S.favs = S.favs || []; if (!S.favs.some((f) => f.cat === cat && f.amount === a) && S.favs.length < 8) S.favs.push({ cat, amount: a }); S.hideUsual = (S.hideUsual || []).filter((k) => k !== cat + "|" + a); } save(); flash = tt("Saved. Edit it under Budget.", "記録しました。直したいときは「家計」から。"); render();
+      });
+      qa.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); qb.click(); } });
+      qb.style.width = "100%"; qc.append(field(tt("How much did you spend today?", "今日いくら使いましたか？"), qa), field(tt("Category", "分類"), qs), qd, qb); view.append(qc);
+    }
     { const ym0 = t.slice(0, 7), spentM = S.spends.filter((x) => String(x.date).slice(0, 7) === ym0).reduce((a,x) => a + (Number(x.amount) || 0), 0);
       const summary = el("div", "home-summary");
       const mkrow = (sym, title, detail, value, action) => { const b = button("", "summary-card", action); const pic = el("span", "summary-icon"); pic.append(icon(sym)); const words = el("span", "summary-label"); words.append(raw("strong", null, title), raw("small", null, detail)); b.append(pic, words, raw("strong", "summary-value", fmt(value)), raw("span", "summary-arrow", "›")); return b; };
@@ -475,7 +509,7 @@
       if (r.reservedNext > 0) summary.append(raw("p", "summary-note", tt("The bills above don’t include " + fmt(r.reservedNext) + " set aside for later bills.", "上の「払うお金」には、あとで払うために取ってある " + fmt(r.reservedNext) + " は含まれていません。")));
       view.append(summary); }
     { const er = el("div", "entryrow"); // レポートとカレンダーの入口（2026-11-07 本人「見やすいレポートと、ちゃんとしたカレンダーを」）
-      er.append(button(tt("Record spending", "使ったお金を記録"), "recgo", () => { tab = "month"; monthOffset = 0; flash = ""; render(); setTimeout(() => { const c0 = document.getElementById("rec-card"); if (c0) { c0.scrollIntoView({ behavior: "smooth", block: "start" }); const a = document.getElementById("l-amt"); if (a) setTimeout(() => { try { a.focus({ preventScroll: true }); } catch (e) {} }, 350); } }, 50); }), button(tt("Payments", "支払い"), "", () => { tab = "bills"; flash = ""; render(); }), button(tt("Income", "収入"), "", () => { tab = "income"; flash = ""; render(); }));
+      er.append(button(tt("Income", "収入"), "", () => { tab = "income"; flash = ""; render(); }));
       view.append(er); }
     { // 買う前に、その場で「これ買っていい？」に答える（使いすぎを防ぐ、このアプリの一番の売り）
       const fit = el("section", "card buycheck"); fit.append(raw("h2", null, tt("If you buy this, how much can you still spend today?", "これを買うと、今日あといくら使える？")));
@@ -524,7 +558,7 @@
     if (!S.sample && S.setup && !S.guideDone && S.spends.length === 0) {
       const g = el("section", "card"); g.append(el("h2", null, tt("Start with these 3 steps", "まず、この3つだけ")));
       const ol = el("ol", "sub"); ol.style.cssText = "margin:6px 0 10px 20px;padding:0;line-height:1.7";
-      ol.append(raw("li", null, tt("Check the number above. If it looks wrong, tap “Re-enter how much money you have now.”", "「いま持っているお金」を見ます。実際の金額と違うときは、「いま持っているお金を入れ直す」を押します。")), raw("li", null, tt("When you spend money, tap “Record spending” above.", "お金を使ったら、上の「使ったお金を記録」を押して入れます。")), raw("li", null, tt("When money comes in, add it under Income. When you pay a bill, tap “Paid” under Payments.", "お金が入ったら「収入」に、支払いをしたら「支払い予定」で「払った」を押します。")));
+      ol.append(raw("li", null, tt("Check the number above. If it looks wrong, tap “Re-enter how much money you have now.”", "「いま持っているお金」を見ます。実際の金額と違うときは、「いま持っているお金を入れ直す」を押します。")), raw("li", null, tt("When you spend money, tap “Record today’s spending” above.", "お金を使ったら、上の「今日使ったお金を記録」を押して入れます。")), raw("li", null, tt("When money comes in, add it under Income. When you pay a bill, tap “Paid” under Payments.", "お金が入ったら「収入」に、支払いをしたら「支払い予定」で「払った」を押します。")));
       g.append(ol, button(tt("Got it, hide this", "分かった（この案内を消す）"), "link", () => { S.guideDone = true; save(); render(); }));
       view.insertBefore(g, view.firstChild);
     }
@@ -540,9 +574,12 @@
       oc.append(raw("p", null, tt("These payments are past their due dates. If you paid any of them before entering the money you have now, tap “Paid” next to each one.", "支払い日を過ぎたものがあります。いまの金額を入れる前に払ったものは、「払った」を押してください。")));
       const done = (o) => { odAsk = odAsk.filter((x) => x !== o); if (!odAsk.length) odAsk = null; };
       odAsk.forEach((o) => {
-        const it = el("div", "item"), l = el("div", "l"), rr = el("div", "r"); l.append(raw("div", null, o.name + " " + fmt(o.amount)), raw("div", "sub", fmtDate(o.date)));
-        rr.append(button(tt("Paid", "払った"), "link", () => { const b = (S.bills || []).find((x) => x.id === o.id); if (b) { if (!b.paidThrough || b.paidThrough < o.date) b.paidThrough = o.date; S.paid = (S.paid || []).filter((p) => p.billId !== b.id || p.for !== o.date); S.paid.push({ id: uid(), billId: b.id, for: o.date, date: o.date, amount: Number(o.amount) || 0, ts: 1 }); } done(o); save(); flash = tt("Marked as paid. The app treats the amount you entered as already reflecting this payment.", "支払い済みにしました。入力した金額からは、もう引かれているものとして扱います。"); render(); }),
-          " ", button(tt("Not yet", "まだ"), "link", () => { done(o); flash = tt("Until you tap “Paid,” " + fmt(o.amount) + " won’t be counted as money you can spend.", "わかりました。「払った」を押すまで、" + fmt(o.amount) + "を使えるお金から除きます。"); render(); }));
+        const key = o.id + "|" + o.date, it = el("div", "item"), l = el("div", "l"), rr = el("div", "r"); l.append(raw("div", null, o.name + " " + fmt(o.amount)), raw("div", "sub", fmtDate(o.date)));
+        const finishPaid = (included) => { const b = (S.bills || []).find((x) => x.id === o.id); if (b) { if (!b.paidThrough || b.paidThrough < o.date) b.paidThrough = o.date; S.paid = (S.paid || []).filter((p) => p.billId !== b.id || p.for !== o.date); const record = { id: uid(), billId: b.id, for: o.date, date: o.date, amount: Number(o.amount) || 0, ts: Date.now() }; if (included) record.historyOnly = true; S.paid.push(record); } overdueChoiceId = null; done(o); save(); flash = included ? tt("Marked paid. This payment was already included in the balance you entered, so it was not subtracted again.", "支払い済みにしました。入力した残高に含まれているため、もう一度は引きません。") : tt("Marked paid. This payment was not in the balance you entered, so it was subtracted now.", "支払い済みにしました。入力した残高に含まれていないため、いま引きました。"); render(); };
+        if (overdueChoiceId === key) {
+          l.append(raw("p", "sub", tt("Is this payment already included in the balance you entered?", "この支払いは、入力した残高にもう含まれていますか？")));
+          rr.append(button(tt("Yes, already included", "はい、もう含まれている"), "link", () => finishPaid(true)), button(tt("No, subtract it now", "いいえ、いま引く"), "link", () => finishPaid(false)), button(tt("Cancel", "やめる"), "link", () => { overdueChoiceId = null; render(); }));
+        } else rr.append(button(tt("Paid", "払った"), "link", () => { overdueChoiceId = key; render(); }), " ", button(tt("Not yet", "まだ"), "link", () => { done(o); flash = tt("Until you tap “Paid,” " + fmt(o.amount) + " won’t be counted as money you can spend.", "わかりました。「払った」を押すまで、" + fmt(o.amount) + "を使えるお金から除きます。"); render(); }));
         it.append(l, rr); oc.append(it);
       });
       view.insertBefore(oc, view.children[1] || null);
@@ -654,8 +691,9 @@
           const ea = input("e-amt", "text", x.amount, { inputmode: "decimal" }), ed = input("e-date", "date", x.date, { max: t }), em = input("e-memo", "text", x.memo || "", { maxlength: "80" });
           const es = select("e-cat", Object.fromEntries(CATS.map((c) => [c, tr(c)])), x.cat);
           f.append(field(tt("Amount", "金額"), ea), field(tt("Date", "日付"), ed), field(tt("Category", "分類"), es), field(tt("Note", "メモ"), em));
+          const editMessage = raw("p", "sub", ""); editMessage.setAttribute("role", "status"); f.append(editMessage); ed.addEventListener("change", () => { editMessage.textContent = ""; });
           const br = el("div", "row"); br.style.gap = "10px";
-          br.append(button(tt("Save", "保存"), "primary", () => { const v = num(ea.value); if (isNaN(v) || v <= 0) return say(tr("Type an amount, for example 4.50.")); x.amount = v; x.date = ed.value && ed.value <= t ? ed.value : x.date; x.cat = es.value; x.memo = em.value.trim(); editSpendId = null; save(); render(); }),
+          br.append(button(tt("Save", "保存"), "primary", () => { const v = num(ea.value); if (isNaN(v) || v <= 0) return say(tr("Type an amount, for example 4.50.")); if (ed.value !== x.date && ed.value < t) { editMessage.textContent = tt("Past dates cannot be changed here. Use the calendar for new past records.", "ここでは過去の日付に変更できません。過去の記録はカレンダーから入力してください。"); return; } const oldDate = x.date, newDate = ed.value && ed.value <= t ? ed.value : x.date, asOf = S.balance && S.balance.asOf; if (asOf && oldDate < asOf && newDate >= asOf && x.historyOnly !== true) x.balanceIncluded = true; else if (asOf && newDate < asOf) delete x.balanceIncluded; x.amount = v; x.date = newDate; x.cat = es.value; x.memo = em.value.trim(); editSpendId = null; save(); render(); }),
             button(tt("Cancel", "やめる"), "link", () => { editSpendId = null; render(); }));
           f.append(br); ent.append(f); return;
         }
@@ -690,7 +728,7 @@
     const tg = el("div", "row"); tg.style.gap = "10px";
     const b1 = button(tt("By pay period", varMode() ? "期間ごと" : "給料日ごと"), planMode === "pay" ? "primary" : "", () => { planMode = "pay"; render(); }), b2 = button(tt("12-month calendar", "1年のカレンダー"), planMode === "year" ? "primary" : "", () => { planMode = "year"; render(); });
     const b3 = button(tt("Calendar", "カレンダー"), planMode === "cal" ? "primary" : "", () => { planMode = "cal"; calOffset = 0; calSel = null; render(); });
-    b1.style.flex = b2.style.flex = b3.style.flex = "1 1 110px"; [b1, b2, b3].forEach((q) => { q.style.whiteSpace = "normal"; q.style.minWidth = "0"; }); tg.style.flexWrap = "wrap"; tg.append(b1, b3, b2); top.append(tg); { const ia = button(tt("Add money coming in (pay, expected income)", "お金が入る予定を入れる（給料・入金予定）"), "link", () => { incomeDateNext = null; tab = "income"; flash = ""; render(); }); ia.style.marginTop = "10px"; top.append(ia); } view.append(top); // 狭い画面では2つと1つに折り返す（320pxで文字が切れた）
+    b1.style.flex = b2.style.flex = b3.style.flex = "1 1 110px"; [b1, b2, b3].forEach((q) => { q.style.whiteSpace = "normal"; q.style.minWidth = "0"; }); tg.style.flexWrap = "wrap"; tg.append(b1, b3, b2); top.append(tg); { const ia = button(tt("Add money coming in (pay, expected income)", "お金が入る予定を入れる（給料・入金予定）"), "link", () => { incomeDateNext = null; tab = "income"; flash = ""; render(); }); ia.style.marginTop = "10px"; const ib0 = button(tt("See payments", "支払い予定を見る"), "link", () => { tab = "bills"; flash = ""; render(); }); ib0.style.marginTop = "10px"; top.append(ia, ib0); } view.append(top); // 狭い画面では2つと1つに折り返す（320pxで文字が切れた）
     const billsIn = (from, to) => { const out = []; (S.bills || []).forEach((b) => E.duesBetween(b, from, to).forEach((d) => out.push({ name: b.name, date: d, amount: Number(b.amount), bill: b }))); return out.sort((x, y) => x.date.localeCompare(y.date) || y.amount - x.amount); };
     // 月・期間のカードから、その中の日付で払うお金を直接足す
     const addPaymentBox = (key, minD, maxD, label, onceLabel) => {
@@ -754,7 +792,7 @@
       const nav = el("div", "row topnav");
       const prev = button("‹", "link", () => { calOffset -= 1; calSel = null; render(); }), next = button("›", "link", () => { calOffset += 1; calSel = null; render(); });
       prev.setAttribute("aria-label", tt("Previous month", "前の月")); next.setAttribute("aria-label", tt("Next month", "次の月"));
-      if (calOffset <= 0) prev.disabled = true; if (calOffset >= 11) next.disabled = true;
+      if (calOffset <= -120) prev.disabled = true; if (calOffset >= 11) next.disabled = true;
       nav.append(prev, raw("strong", null, S.lang === "ja" ? y0 + "年" + (mi0 + 1) + "月" : MONS[mi0] + " " + y0), next); cc.append(nav);
       const g = el("div", "calgrid"); WD.forEach((w) => g.append(raw("div", "calw", w)));
       for (let i = 0; i < base.getDay(); i++) g.append(el("div", "calc empty"));
@@ -785,6 +823,30 @@
       S.spends.filter((x) => x.date === sel).forEach((x) => row(tr(x.cat), x.amount, tt("Spending you recorded", "記録した支出") + (x.memo ? tt(" · ", "・") + x.memo : "")));
       if (!any) dc.append(raw("p", "sub", tt("No plans or records for this day.", "この日に予定や記録はありません。")));
       dc.append(list);
+      if (sel <= t) {
+        const entry = el("details", "more");
+        entry.append(raw("summary", null, tt("+ Record money for this day", "＋ この日の支出・入金を記録")));
+        const ambiguous = !!(S.balance && S.balance.asOf && sel <= S.balance.asOf);
+        const info = raw("p", "sub", ambiguous ? tt("Is this already included in your current balance?", "この記録は、いまの残高に含まれていますか？") : tt("This record changes your balance.", "この記録は残高に反映します。"));
+        const choice = select("cal-entry-choice", { "": tt("Choose", "選んでください"), included: tt("Already included — history only", "含まれている → 履歴だけ"), apply: tt("Not included — change balance", "含まれていない → 残高に反映"), unknown: tt("Not sure — check balance", "分からない → 残高を確認") }, "");
+        const kind = select("cal-entry-kind", { spend: tt("Spending", "支出"), income: tt("Money received", "入金") }, "spend");
+        const category = select("cal-entry-category", Object.fromEntries(CATS.map(c => [c, tr(c)])), "Other");
+        const amount = input("cal-entry-amount", "text", "", { inputmode: "decimal", placeholder: tr("Amount"), "aria-label": tt("Amount", "金額") });
+        const memo = input("cal-entry-note", "text", "", { maxlength: 80, placeholder: tt("Note (optional)", "メモ（なくてもOK）") });
+        const preview = raw("p", "sub", ""); preview.setAttribute("role", "status");
+        const updatePreview = () => { const n = num(amount.value); if (ambiguous && choice.value === "unknown") { preview.textContent = tt("Check your balance first. Nothing will be saved yet.", "いまの残高を確認してください。まだ記録しません。"); return; } if (ambiguous && !choice.value) { preview.textContent = ""; return; } if (ambiguous && choice.value === "included") { preview.textContent = tt("Balance will not change.", "残高は変わりません。"); return; } preview.textContent = isNaN(n) || n <= 0 ? "" : tt("Balance ", "残高 ") + (kind.value === "spend" ? "−" : "+") + fmt(n); };
+        [amount,kind,choice].forEach(x => { x.addEventListener("input", updatePreview); x.addEventListener("change", updatePreview); });
+        const go = button(tt("Save record", "記録する"), "primary", () => {
+          const a = num(amount.value); if (isNaN(a) || a <= 0) return say(tt("Enter an amount.", "金額を入れてください。"));
+          if (ambiguous && !choice.value) return say(tt("Choose whether the balance includes this record.", "残高に含まれているか選んでください。"));
+          if (ambiguous && choice.value === "unknown") { preview.textContent = tt("Check your current balance first. This record was not saved.", "いまの残高を確認してください。この記録はまだ保存していません。"); return; }
+          const historyOnly = ambiguous && choice.value === "included", backfillApplied = ambiguous && choice.value === "apply";
+          if (kind.value === "spend") { if (CFG.demo && S.spends.length >= CFG.demoLimit) return say(tt("Spending entry limit reached.", "支出の記録が上限に達しました。")); S.spends.push({ id: uid(), date: sel, amount: a, cat: category.value, ts: Date.now(), historyOnly, backfillApplied, memo: memo.value.trim() }); }
+          else { const item = { id: uid(), date: sel, amount: a, status: "received", label: memo.value.trim(), ts: Date.now(), historyOnly, backfillApplied }; S.income.push(item); if (!ambiguous || backfillApplied) taxOn(item); else { item.taxPct = 0; item.taxed = 0; } }
+          save(); flash = tt("Saved.", "記録しました。"); render();
+        });
+        if (ambiguous) entry.append(field(tt("Is this already included in your current balance?", "この記録は、いまの残高に含まれていますか？"), choice)); else entry.append(info); entry.append(field(tt("Type", "種類"), kind), field(tt("Spending category", "支出の分類"), category), field(tt("Amount", "金額"), amount), field(tt("Note (optional)", "メモ（なくてもOK）"), memo), preview, go); dc.append(entry);
+      }
       if (D(sel) >= D(t)) dc.append(addPaymentBox("c" + sel, sel, sel, tt("+ Add a bill for this day", "＋ この日の支払い予定を追加"), tt("Just this once", "1回だけ")));
       { const ib = button(tt("Add money coming in on " + fmtDate(sel), fmtDate(sel) + " にお金が入る予定を入れる"), "link", () => { incomeDateNext = sel; tab = "income"; flash = ""; render(); }); dc.append(ib); }
       view.append(dc);
@@ -829,18 +891,40 @@
     const odOf = (b) => (r.overdueList || []).filter((o) => o.id === b.id).map((o) => o.date).sort()[0];
     const rows = S.bills.map((b) => ({ b, next: odOf(b) || E.nextDue(b, t) })).sort((x, y) => (x.next || "9999").localeCompare(y.next || "9999"));
     if (!rows.length) c.append(el("p", "sub", "No payments added yet. Add the ones you know about. You can add more later."));
+    c.append(raw("p", "sub", tt("Money you have now: ", "いま持っているお金：") + fmt(r.available)));
     const list = el("div", "list");
     rows.forEach(({ b, next }) => {
-      const it = el("div", "item"); const l = el("div", "l");
+      const it = el("div", "item"); it.style.cssText = "display:block;padding:14px 0"; const l = el("div", "l");
       const dd = next ? E.toDays(next) - E.toDays(t) : null;
       const when = next ? md(next) + (dd === 0 ? tt(" (today)", "（今日）") : dd > 0 ? tt(" (in " + dd + " days)", "（あと" + dd + "日）") : tt(" (late)", "（過ぎています）")) : tr("No next payment");
-      { const sd = el("div", "sub"); sd.append(next ? tapDate(when, b.due || next, (v) => { b.due = v; if (b.paidThrough && v <= b.paidThrough) delete b.paidThrough; save(); flash = tt("Payment date changed to " + md(v) + ".", "支払い日を" + md(v) + "に変えました。"); render(); }, b.name) : when, " · " + (EV[b.every] || (/^m(\d+)$/.test(b.every) ? tt("Every " + b.every.slice(1) + " months", b.every.slice(1) + "か月ごと") : b.every))); l.append(raw("div", null, b.name), sd); }
-      if (next && r.payday && dd >= 0 && next < r.payday) l.append(raw("div", "sub", tt((varMode() ? "Within the next " + winN() + " days" : "Before payday") + " — counted in today’s amount", (varMode() ? "この先" + winN() + "日の中" : "次にお金が入る日より前") + " 。今日使えるお金から引いています")));
+      { const sd = el("div", "sub"); sd.append(next ? tapDate(when, b.due || next, (v) => { rebasePaidOccurrence(b, v); save(); flash = tt("Payment date changed to " + md(v) + ".", "支払い日を" + md(v) + "に変えました。"); render(); }, b.name) : when, " · " + (EV[b.every] || (/^m(\d+)$/.test(b.every) ? tt("Every " + b.every.slice(1) + " months", b.every.slice(1) + "か月ごと") : b.every))); l.append(raw("div", null, b.name), sd); }
+      if (next && r.payday && dd >= 0 && next < r.payday) l.append(raw("div", "sub", tt((varMode() ? "Within the next " + winN() + " days" : "Before payday") + " — counted in today’s amount", (varMode() ? "この先" + winN() + "日の中" : "次にお金が入る日より前") + "。今日使えるお金から引いています")));
       if (dd != null && dd < 0) l.append(raw("div", "sub", tt("The due date has passed. If you paid it, tap “Paid.” Until then, it isn’t counted as money you can spend.", "支払い日を過ぎています。払ったら「払った」を押してください。押すまでは、払うお金として取っておきます。")));
       if (E.monthsOf(b.every) > 1) l.append(raw("div", "sub", tt("Monthly share: " + fmt(b.amount / E.monthsOf(b.every)) + ". The app doesn’t save this money for you.", "1か月あたりの目安：" + fmt(b.amount / E.monthsOf(b.every)) + "。自動では貯まりません。")));
-      if (b.paidThrough) { const pu = el("div", "sub"); pu.append(tt("Previous payment (" + md(b.paidThrough) + "): paid", "前回の分（" + md(b.paidThrough) + "）は支払い済み"), " ", button(tt("Undo previous payment status", "前回の支払い済みを取り消す"), "link", () => { const mine = (S.paid || []).filter((p) => p.billId === b.id).sort((x, y) => (x.ts || 0) - (y.ts || 0)); const last = mine.pop(); if (last) S.paid = S.paid.filter((p) => p.id !== last.id); const prev = mine.length ? mine[mine.length - 1].for : null; if (prev) b.paidThrough = prev; else delete b.paidThrough; save(); flash = tt("Previous payment marked as unpaid.", "前回の分を未払いに戻しました。"); render(); })); pu.append(raw("div", "sub", tt("Marks the previous payment as unpaid.", "前回の分を「未払い」に戻します。"))); l.append(pu); }
-      const rr = el("div", "r"); rr.append(tapNum(fmt(b.amount), b.amount, (v) => { b.amount = v; save(); render(); }, null, null, b.name), el("br"));
-      if (next) rr.append(button("Paid", "link", () => { b.paidThrough = next; S.paid = (S.paid || []).filter((p) => p.billId !== b.id || p.for !== next); S.paid.push({ id: uid(), billId: b.id, for: next, date: t, amount: Number(b.amount), ts: Date.now() }); save(); render(); }));
+      if (b.paidThrough) { const pu = el("div", "sub"); const records = (S.paid || []).filter((p) => p.billId === b.id && p.for === b.paidThrough).sort((x, y) => (x.ts || 0) - (y.ts || 0)); const paidRecord = records[records.length - 1]; pu.append(tt("Due " + md(b.paidThrough) + ": marked paid", md(b.paidThrough) + "が期限の分：支払い済み")); if (paidRecord && paidRecord.date) { const recorded = raw("span", null, tt(" on " + md(paidRecord.date), "（記録した日 " + md(paidRecord.date) + "）")); recorded.style.whiteSpace = "nowrap"; pu.append(recorded); } pu.append(" ", button(tt("Undo paid mark", "支払い済みを取り消す"), "link", () => { const before = E.compute(S, t).available, target = b.paidThrough; const current = (S.paid || []).filter((p) => p.billId === b.id && p.for === target).sort((x, y) => (x.ts || 0) - (y.ts || 0)).pop(); if (current) S.paid = S.paid.filter((p) => p.id !== current.id); const prev = (S.paid || []).filter((p) => p.billId === b.id).map((p) => p.for || p.date).filter(Boolean).sort().pop(); if (prev) b.paidThrough = prev; else delete b.paidThrough; save(); const after = E.compute(S, t).available; focusFlash = true; flash = tt("Paid mark removed. Money you have now: ", "支払い済みを取り消しました。いま持っているお金：") + fmt(before) + " → " + fmt(after); render(); })); l.append(pu); }
+      const reconcile = !!(next && dd < 0 && S.balance && S.balance.asOf && next <= S.balance.asOf), choiceKey = next ? b.id + "|" + next : "";
+      const finishPaid = (included) => {
+        const before = E.compute(S, t).available;
+        b.paidThrough = next;
+        S.paid = (S.paid || []).filter((p) => p.billId !== b.id || p.for !== next);
+        const record = { id: uid(), billId: b.id, for: next, date: t, amount: Number(b.amount), ts: Date.now() };
+        if (included) record.historyOnly = true;
+        S.paid.push(record); overdueChoiceId = null; save();
+        const after = E.compute(S, t).available; focusFlash = true;
+        flash = included
+          ? tt("Marked paid. This payment was already included in the balance you entered, so it was not subtracted again.", "支払い済みにしました。入力した残高に含まれているため、もう一度は引きません。")
+          : tt("Marked paid. This payment was not in the balance you entered, so it was subtracted now.", "支払い済みにしました。入力した残高に含まれていないため、いま引きました。");
+        if (!reconcile) flash = tt("Marked paid. Money you have now: ", "支払い済みにしました。いま持っているお金：") + fmt(before) + " → " + fmt(after);
+        render();
+      };
+      const rr = el("div", "r"); rr.style.cssText = "display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:8px;margin-top:10px;text-align:left"; rr.append(tapNum(fmt(b.amount), b.amount, (v) => { b.amount = v; save(); render(); }, null, null, b.name));
+      if (next) rr.append(button("Paid", "link", () => { if (reconcile) { overdueChoiceId = choiceKey; render(); return; } finishPaid(false); }));
+      if (reconcile && overdueChoiceId === choiceKey) {
+        l.append(raw("p", "sub", tt("Is this payment already included in the balance you entered?", "この支払いは、入力した残高にもう含まれていますか？")));
+        rr.append(button(tt("Yes, already included", "はい、もう含まれている"), "link", () => finishPaid(true)),
+          button(tt("No, subtract it now", "いいえ、いま引く"), "link", () => finishPaid(false)),
+          button(tt("Cancel", "やめる"), "link", () => { overdueChoiceId = null; render(); }));
+      }
       rr.append(button("Edit", "link", () => { editBillId = b.id; render(); }));
       rr.append(button("Remove", "link danger", () => { S.bills = S.bills.filter((x) => x.id !== b.id); save(); render(); }));
       it.append(l, rr); list.append(it);
@@ -872,7 +956,8 @@
     const add = button("Add payment", "primary", () => {
       const a = num(amt.value);
       if (!name.value.trim() || isNaN(a) || a <= 0 || !due.value) { errEl.hidden = false; errEl.textContent = tr("Enter a name, amount, and date."); errEl.scrollIntoView({ block: "center" }); return; }
-      if (eb) { eb.name = name.value.trim(); eb.amount = a; eb.every = everyVal(); const dueChanged = eb.due !== due.value; eb.due = due.value; if (dueChanged && eb.paidThrough && eb.due <= eb.paidThrough) delete eb.paidThrough; if (until.value) eb.until = until.value; else delete eb.until; editBillId = null; save(); flash = tt("Saved.", "保存しました。"); render(); return; }
+      if (eb) { eb.name = name.value.trim(); eb.amount = a; eb.every = everyVal(); if (eb.due !== due.value) rebasePaidOccurrence(eb, due.value); if (until.value) eb.until = until.value; else delete eb.until; editBillId = null; save(); flash = tt("Saved.", "保存しました。"); render(); return; }
+      if (due.value < t) { errEl.hidden = false; errEl.textContent = tt("A new payment must start today or later. Check the next due date before adding it.", "新しい支払い予定は今日以降の日付にしてください。追加する前に、次の支払い日を確かめてください。"); errEl.scrollIntoView({ block: "center" }); return; }
       const nb = { id: uid(), name: name.value.trim(), amount: a, every: everyVal(), due: due.value }; if (until.value) nb.until = until.value;
       S.bills.push(nb); save(); flash = ""; render();
     });
@@ -907,17 +992,31 @@
     items.forEach((i) => {
       const it = el("div", "item"); const left = el("div", "l"); { const t1 = raw("div", null, ""); t1.append(tapNum(fmt(i.amount), i.amount, (v) => { taxSet(i, v); i.amount = v; save(); render(); }, null, null, (i.label ? i.label + ", " : "") + fmtDate(i.date) + ", " + tr(LBL[i.status])), i.label ? "　" + i.label : ""); left.append(t1); } left.append( raw("div", "sub", fmtDate(i.date) + " · " + tr(LBL[i.status])));
       const r = el("div", "r");
-      if (NEXT[i.status]) r.append(button(i.status === "expected" ? "Mark payment as requested" : "Money arrived", "link", () => { i.status = NEXT[i.status]; if (i.status === "received") { if (i.date > t || (S.balance && S.balance.asOf && i.date < S.balance.asOf)) i.date = t; i.ts = Date.now(); flash = taxMsg(taxOn(i)); } save(); render(); }));
+      if (NEXT[i.status]) {
+        const markReceived = (included) => { i.status = "received"; if (i.date > t || (S.balance && S.balance.asOf && i.date < S.balance.asOf)) i.date = t; if (included) i.historyOnly = true; else delete i.historyOnly; i.ts = Date.now(); incomeChoiceId = null; const tax = taxOn(i); flash = (included ? tt("Marked received. Your entered balance already includes this money, so it was not added again.", "入金済みにしました。入力した残高に含まれているため、二重には足していません。") : tt("Marked received. This money was added after the balance you entered.", "入金済みにしました。入力した残高の後に入ったお金として反映しました。")) + (tax > 0 ? " " + taxMsg(tax) : ""); save(); render(); };
+        // 残高入力日より前の入金だけ、現在の残高に含まれるかを確認する。
+        // 同じ日付の入金は通常の当日操作として扱い、余計な確認を出さない。
+        const needsCheck = i.status !== "received" && i.date < t && S.balance && S.balance.asOf && i.date < S.balance.asOf;
+        if (incomeChoiceId === i.id) {
+          r.append(button(tt("Yes, already included", "はい、含まれている"), "link", () => markReceived(true)), button(tt("No, add it now", "いいえ、いま足す"), "link", () => markReceived(false)), button(tt("Cancel", "やめる"), "link", () => { incomeChoiceId = null; render(); }));
+          it.append(raw("p", "sub", tt("Does your current balance already include this money?", "この入金は、いまの残高にもう含まれていますか？")));
+        } else r.append(button(i.status === "expected" ? "Mark payment as requested" : "Money arrived", "link", () => {
+          if (i.status === "expected") { i.status = "invoiced"; save(); render(); return; }
+          if (needsCheck) { incomeChoiceId = i.id; render(); return; }
+          markReceived(false);
+        }));
+      }
       r.append(button("Remove", "link danger", () => { taxOff(i); S.income = S.income.filter((x) => x.id !== i.id); save(); render(); }));
       it.append(left, r); list.append(it);
     });
     l.append(list); view.append(l);
-    const f = el("section", "card"); f.append(el("h2", null, "Add money coming in"), raw("p", "sub", tt("Record your pay or any money you received or expect to receive. Money marked “In my account” is added to the amount you can spend today.", "給料や、入ったお金・入る予定のお金を、ここに記録します。「入った」にしたお金は、今日使えるお金にふえます。")));
+    const f = el("section", "card"); f.append(el("h2", null, "Add money coming in"), raw("p", "sub", tt("Record your pay or any money you received or expect to receive. Received money after the day you last entered your balance changes your balance. Earlier records are saved to history only.", "給料や、入ったお金・入る予定のお金を、ここに記録します。残高を入れ直した日より後の入金は残高に反映し、それ以前は履歴だけに残ります。")));
     const w2 = el("div"); w2.style.cssText = "display:flex;flex-direction:column;gap:12px";
     const preDate = incomeDateNext || t; incomeDateNext = null; const amt = input("m-amt", "text", "", { inputmode: "decimal", placeholder: tr("Amount") }); const dt = input("m-dt", "date", preDate); const lb = input("m-lb", "text", "", { maxlength: 40, placeholder: tr("Note (optional)") });
     const st = select("m-st", { received: tr("In my account"), invoiced: tr("I asked for payment (not paid yet)"), expected: tr("Expected (I haven’t asked for payment yet)") }, preDate > t ? "expected" : "received");
     w2.append(field("Amount", amt), field("Date", dt), field("Status", st), field("Note (optional)", lb));
-    const add = button("Add", "primary", () => { const a = num(amt.value); if (isNaN(a) || a <= 0 || !dt.value) return say(tr("Please type an amount and a date.")); const ni = { id: uid(), ts: Date.now(), date: dt.value, amount: a, status: st.value, label: lb.value.trim() }; S.income.push(ni); flash = taxMsg(taxOn(ni)); save(); render(); });
+    const incomeMessage = raw("p", "sub", ""); incomeMessage.setAttribute("role", "status"); w2.append(incomeMessage); [dt, st].forEach(x => x.addEventListener("change", () => { incomeMessage.textContent = ""; }));
+    const add = button("Add", "primary", () => { const a = num(amt.value); if (isNaN(a) || a <= 0 || !dt.value) return say(tr("Please type an amount and a date.")); if (st.value === "received" && dt.value < todayStr()) { incomeMessage.textContent = tt("For past received money, use the calendar.", "過去に入ったお金はカレンダーから入力してください。"); return; } if (st.value === "received" && dt.value > t) { incomeMessage.textContent = tt("A future date cannot be marked as received. Choose Expected, then mark it received when the money arrives.", "先の日付は「入った」にできません。「入る予定」にして、実際に入った日に入金済みにしてください。"); return; } const ni = { id: uid(), ts: Date.now(), date: dt.value, amount: a, status: st.value, label: lb.value.trim(), historyOnly: dt.value < t && st.value === "received" && !!(S.balance && S.balance.asOf && dt.value <= S.balance.asOf) }; S.income.push(ni); if (ni.historyOnly) { ni.taxPct = 0; ni.taxed = 0; flash = tt("Saved to history only.", "履歴に記録しました。残高は変わりません。"); } else flash = taxMsg(taxOn(ni)); save(); render(); });
     add.style.cssText = "width:100%;margin-top:14px"; f.append(w2, add); view.append(f);
   }
 
@@ -1096,10 +1195,11 @@
     } else if (loadBroken && !userActed) { const W2 = tt("The saved information on this device couldn’t be read. A separate copy was kept on this device, not deleted.", "このスマホやパソコンに保存された記録が読めませんでした。消さずに、このスマホやパソコンの別の場所に残してあります。"); if (flash.indexOf(W2) < 0) flash = W2 + (flash ? " " + flash : ""); }
     if (saveFailed && !(loadBroken && !brokenKept && !rawDownloaded)) { const W = tt("Your information couldn’t be saved on this device. Storage may be full or blocked. If you can open Settings, use “Save a copy” to back up your current information.", "このスマホやパソコンに記録を保存できませんでした。保存場所がいっぱいか、使えない設定になっているかもしれません。「設定」が開ければ、下の方の「記録をファイルに保存」で、いまの記録を残してください。"); if (flash.indexOf(W) < 0) flash = W + (flash ? " " + flash : ""); }
     document.documentElement.lang = S.lang === "ja" ? "ja" : "en";
-    document.querySelectorAll(".tabs button").forEach((b) => { const activeTab = (tab === "bills" || tab === "income") ? "today" : tab; const on = b.dataset.tab === activeTab; b.classList.toggle("on", on); if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); const labels = { today: ["Home", "ホーム"], month: ["Budget", "家計"], plan: ["Calendar", "カレンダー"], settings: ["Settings", "設定"] }; const symbols = { today: "⌂", month: "▥", plan: "▦", settings: "♙" }; b.textContent = ""; const glyph = raw("span", "tab-symbol", symbols[b.dataset.tab]); glyph.setAttribute("aria-hidden", "true"); b.append(glyph, document.createTextNode(tt(...labels[b.dataset.tab]))); });
+    document.querySelectorAll(".tabs button").forEach((b) => { const activeTab = (tab === "bills" || tab === "income") ? "month" : tab; const on = b.dataset.tab === activeTab; b.classList.toggle("on", on); if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); const labels = { today: ["Home", "ホーム"], month: ["Budget", "家計"], plan: ["Calendar", "カレンダー"], settings: ["Settings", "設定"] }; const symbols = { today: "⌂", month: "▥", plan: "▦", settings: "♙" }; b.textContent = ""; const glyph = raw("span", "tab-symbol", symbols[b.dataset.tab]); glyph.setAttribute("aria-hidden", "true"); b.append(glyph, document.createTextNode(tt(...labels[b.dataset.tab]))); });
     if (flash) { const n = note(flash); n.setAttribute("role", "status"); n.tabIndex = -1; view.append(n); if (focusFlash) { focusFlash = false; n.focus(); } }
     if (!S.setup) { $(".tabs").hidden = true; setupView(); return; }
     $(".tabs").hidden = false;
+    if (tab === "month" || tab === "bills" || tab === "income") view.append(budgetSwitch());
     ({ today: todayView, month: monthView, plan: planView, bills: billsView, income: incomeView, settings: settingsView })[tab]();
     // 大きな数字が枠からはみ出す時は、収まるまで文字を小さくする
     // 同じ金額が並んでも区別できるように、読み上げの名前に、その行の名前（支払い名・分類など）を足す

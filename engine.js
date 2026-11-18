@@ -85,7 +85,7 @@
     const base = state.balance ? Number(state.balance.amount) || 0 : 0;
     // 残高を入れた日の分から数える。ただし「入れ直した時刻(at)」より前に記録したものは、その残高にもう含まれているので数えない（二重に引かない）
     const at = state.balance && state.balance.at ? Number(state.balance.at) : 0;
-    const counts = (x) => { const d = toDays(x.date), a = toDays(asOf); if (d > a) return true; if (d < a) return false; return !(at && x.ts && Number(x.ts) <= at); };
+    const counts = (x) => { if (x.historyOnly === true || x.balanceIncluded === true) return false; if (x.backfillApplied === true) return !(at && x.ts && Number(x.ts) <= at); const d = toDays(x.date), a = toDays(asOf); if (d > a) return true; if (d < a) return false; return !(at && x.ts && Number(x.ts) <= at); };
 
     const received = (state.income || []).filter((i) => i.status === "received" && counts(i) && toDays(i.date) <= toDays(today))
       .reduce((a, i) => a + Number(i.amount), 0);
@@ -94,7 +94,7 @@
     // 「払った」を押した請求は、口座から出たお金として1回だけ引く（その請求の取り分けは、払った時点で外れる）
     const paidOut = (state.paid || []).filter((p) => counts(p) && toDays(p.date) <= toDays(today))
       .reduce((a, p) => a + Number(p.amount), 0);
-    const spentToday = (state.spends || []).filter((s) => s.date === today).reduce((a, s) => a + Number(s.amount), 0);
+    const spentToday = (state.spends || []).filter((s) => s.date === today && s.historyOnly !== true && s.balanceIncluded !== true).reduce((a, s) => a + Number(s.amount), 0);
     const available = base + received - spent - paidOut;
 
     // 次の給料日（または、収入がバラバラのモードでは「見通しの日数」）
@@ -140,7 +140,7 @@
     let capHold = 0, capAbsorbed = 0;
     for (const c of state.caps || []) {
       const cap = Number(c.amount) || 0; if (cap <= 0) continue;
-      const inMonth = (state.spends || []).filter((x) => x.cat === c.cat && String(x.date).slice(0, 7) === month);
+      const inMonth = (state.spends || []).filter((x) => x.historyOnly !== true && x.cat === c.cat && String(x.date).slice(0, 7) === month);
       const usedBefore = inMonth.filter((x) => x.date !== today).reduce((a, x) => a + (Number(x.amount) || 0), 0);
       const usedToday = inMonth.filter((x) => x.date === today).reduce((a, x) => a + (Number(x.amount) || 0), 0);
       const leftBefore = Math.max(0, cap - usedBefore);
