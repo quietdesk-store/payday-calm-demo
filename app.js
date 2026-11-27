@@ -548,11 +548,11 @@
       view.append(sc);
     }
     if (S.sample) {
-      const sn = note(tt("These are practice numbers, not yours. When you tap “Use my own numbers”, the example records are cleared.", "これは練習用の数字です。あなたの数字ではありません。「自分の金額で始める」を押すと、例の記録は消えます。")); sn.append(" ", button("Use my own numbers", "link", () => { const lang = S.lang, cur = S.currency; S = fresh(); S.lang = lang; S.currency = cur; S.noSample = true; save(); render(); }));
-      view.insertBefore(sn, view.firstChild);
+      const sn = note(CFG.demo ? tt("Practice numbers.", "練習用の数字です。") : tt("These are practice numbers, not yours. When you tap “Use my own numbers”, the example records are cleared.", "これは練習用の数字です。あなたの数字ではありません。「自分の金額で始める」を押すと、例の記録は消えます。")); sn.append(" ", button("Use my own numbers", "link", () => { const lang = S.lang, cur = S.currency; S = fresh(); S.lang = lang; S.currency = cur; S.noSample = true; save(); render(); }));
+      const demoOrder = CFG.demo ? view.querySelector(".card") : null; if (demoOrder) demoOrder.after(sn); else view.insertBefore(sn, view.firstChild);
       if (CFG.demo && !S.demoTipDone) {
         const tip = el("section", "card"); tip.append(el("h2", null, tt("Try a sample purchase", "例の買い物を、ためしてみる")));
-        tip.append(raw("p", null, tt("Enter a price in the box below to see how much you could still spend today.", "下の欄に値段を入れると、今日あといくら使えるか分かります。")), raw("p", "sub", tt("Try all the features. The demo lets you keep up to " + CFG.demoLimit + " spending entries.", "ぜんぶの機能をためせます。使ったお金は" + CFG.demoLimit + "回まで記録できます。")), button(tt("Got it, hide this", "分かった（これを消す）"), "link", () => { S.demoTipDone = true; save(); render(); }));
+        tip.append(raw("p", null, tt("Scroll down to “If you buy this” and enter a price to see how much you could still spend today.", "下の「これを買ったら」の欄に値段を入れると、今日あといくら使えるか分かります。")), raw("p", "sub", tt("Try all the features. The demo lets you keep up to " + CFG.demoLimit + " spending entries.", "ぜんぶの機能をためせます。使ったお金は" + CFG.demoLimit + "回まで記録できます。")), button(tt("Got it, hide this", "分かった（これを消す）"), "link", () => { S.demoTipDone = true; save(); render(); }));
         view.insertBefore(tip, sn.nextSibling);
       }
     }
